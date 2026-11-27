@@ -4,6 +4,11 @@
 //   ASGARDEO_BASE_URL  e.g. https://api.asgardeo.io/t/<org>
 //   MCP_RESOURCE       the public MCP URL, e.g. https://<gateway>/<component>-<endpoint>/mcp
 //   MCP_SCOPE          scope(s) required in the token, space-separated, e.g. "mcp:access"
+// Optional:
+//   ASGARDEO_CLIENT_ID client ID of the MCP client app (e.g. Claude) registered in Asgardeo.
+//                      Asgardeo issues access tokens with aud = client ID instead of the MCP
+//                      server identifier, so when this is set a token is also accepted if its
+//                      aud and azp are this client (it must still carry MCP_SCOPE).
 // Without them the server runs with NO auth (local testing only).
 
 import express from "express";
@@ -13,7 +18,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 const PORT = Number(process.env.PORT || 3000);
-const { ASGARDEO_BASE_URL, MCP_RESOURCE, MCP_SCOPE } = process.env;
+const { ASGARDEO_BASE_URL, MCP_RESOURCE, MCP_SCOPE, ASGARDEO_CLIENT_ID } = process.env;
 const authSettings = [ASGARDEO_BASE_URL, MCP_RESOURCE, MCP_SCOPE].filter(Boolean).length;
 if (authSettings !== 0 && authSettings !== 3) {
   throw new Error("Set all of ASGARDEO_BASE_URL, MCP_RESOURCE and MCP_SCOPE, or none of them.");
@@ -77,11 +82,20 @@ if (auth) {
     let claims;
     try {
       ({ payload: claims } = await jwtVerify(token, auth.jwks, {
-        issuer: auth.issuer, audience: auth.resource.href, algorithms: ["RS256"], requiredClaims: ["exp"],
+        issuer: auth.issuer,
+        audience: [auth.resource.href, ...(ASGARDEO_CLIENT_ID ? [ASGARDEO_CLIENT_ID] : [])],
+        algorithms: ["RS256"], requiredClaims: ["exp"], clockTolerance: "30s",
       }));
+      // A token for the client (not the resource) is accepted only if it was issued to that client.
+      const audiences = [].concat(claims.aud);
+      if (!audiences.includes(auth.resource.href) && (claims.azp ?? claims.client_id) !== ASGARDEO_CLIENT_ID) {
+        console.warn("Rejected token: aud/azp do not match", JSON.stringify({ aud: claims.aud, azp: claims.azp }));
+        return res.set("WWW-Authenticate", auth.challenge + ', error="invalid_token"').sendStatus(401);
+      }
     } catch (error) {
       if (error instanceof errors.JWKSTimeout || !(error instanceof errors.JOSEError)) return res.sendStatus(503);
-      console.warn("Rejected token:", error.code || error.message);
+      console.warn("Rejected token:", error.code || error.message, error.claim ?? "", error.reason ?? "",
+        JSON.stringify({ iss: error.payload?.iss, aud: error.payload?.aud, scope: error.payload?.scope }));
       return res.set("WWW-Authenticate", auth.challenge + ', error="invalid_token"').sendStatus(401);
     }
     const granted = typeof claims.scope === "string" ? claims.scope.split(/\s+/) : [];
@@ -103,6 +117,7 @@ app.all(mcpPaths, (_req, res) => res.set("Allow", "POST").status(405).end());
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`mock-mcp listening on :${PORT}`);
-  console.log(auth ? `auth ON: issuer ${auth.issuer}, resource ${auth.resource.href}, scopes ${requiredScopes.join(" ")}`
+  console.log(auth ? `auth ON: issuer ${auth.issuer}, resource ${auth.resource.href}, scopes ${requiredScopes.join(" ")}` +
+                     (ASGARDEO_CLIENT_ID ? `, also accepting aud/azp = client ${ASGARDEO_CLIENT_ID}` : "")
                    : "WARNING: auth OFF (set ASGARDEO_BASE_URL, MCP_RESOURCE, MCP_SCOPE)");
 });
