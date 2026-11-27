@@ -3,7 +3,7 @@
 // Auth is on when these env vars are set:
 //   ASGARDEO_BASE_URL  e.g. https://api.asgardeo.io/t/<org>
 //   MCP_RESOURCE       the public MCP URL, e.g. https://<gateway>/<component>-<endpoint>/mcp
-//   MCP_SCOPE          scope required in the token, e.g. mcp:access
+//   MCP_SCOPE          scope(s) required in the token, space-separated, e.g. "mcp:access"
 // Without them the server runs with NO auth (local testing only).
 
 import express from "express";
@@ -18,6 +18,7 @@ const authSettings = [ASGARDEO_BASE_URL, MCP_RESOURCE, MCP_SCOPE].filter(Boolean
 if (authSettings !== 0 && authSettings !== 3) {
   throw new Error("Set all of ASGARDEO_BASE_URL, MCP_RESOURCE and MCP_SCOPE, or none of them.");
 }
+const requiredScopes = (MCP_SCOPE || "").split(/\s+/).filter(Boolean);
 const auth = authSettings === 3 ? setupAuth() : null;
 
 function setupAuth() {
@@ -28,7 +29,7 @@ function setupAuth() {
   return {
     resource, issuer, metadataUrl,
     jwks: createRemoteJWKSet(new URL(base + "/oauth2/jwks")),
-    challenge: `Bearer resource_metadata="${metadataUrl.href}", scope="${MCP_SCOPE}"`,
+    challenge: `Bearer resource_metadata="${metadataUrl.href}", scope="${requiredScopes.join(" ")}"`,
   };
 }
 
@@ -65,7 +66,7 @@ if (auth) {
   app.get(metadataPaths, (_req, res) => res.json({
     resource: auth.resource.href,
     authorization_servers: [auth.issuer],
-    scopes_supported: [MCP_SCOPE],
+    scopes_supported: requiredScopes,
     bearer_methods_supported: ["header"],
   }));
 
@@ -83,8 +84,8 @@ if (auth) {
       console.warn("Rejected token:", error.code || error.message);
       return res.set("WWW-Authenticate", auth.challenge + ', error="invalid_token"').sendStatus(401);
     }
-    const scopes = typeof claims.scope === "string" ? claims.scope.split(" ") : [];
-    if (!scopes.includes(MCP_SCOPE)) {
+    const granted = typeof claims.scope === "string" ? claims.scope.split(/\s+/) : [];
+    if (!requiredScopes.every((s) => granted.includes(s))) {
       return res.set("WWW-Authenticate", auth.challenge + ', error="insufficient_scope"').sendStatus(403);
     }
     next();
@@ -102,6 +103,6 @@ app.all(mcpPaths, (_req, res) => res.set("Allow", "POST").status(405).end());
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`mock-mcp listening on :${PORT}`);
-  console.log(auth ? `auth ON: issuer ${auth.issuer}, resource ${auth.resource.href}, scope ${MCP_SCOPE}`
+  console.log(auth ? `auth ON: issuer ${auth.issuer}, resource ${auth.resource.href}, scopes ${requiredScopes.join(" ")}`
                    : "WARNING: auth OFF (set ASGARDEO_BASE_URL, MCP_RESOURCE, MCP_SCOPE)");
 });
