@@ -18,11 +18,12 @@ The server checks **Asgardeo** access tokens itself when these env vars are set 
 | `ASGARDEO_BASE_URL` | `https://api.asgardeo.io/t/<org>` |
 | `MCP_RESOURCE` | the public MCP URL, e.g. `https://<env>-<ns>.<gateway-host>/<component>-mcp/mcp` |
 | `MCP_SCOPE` | `mcp:access` |
+| `ASGARDEO_CLIENT_ID` (optional) | client ID of the MCP client app in Asgardeo, e.g. the Claude app. Needed because Asgardeo sets the access token `aud` to the client ID, not to `MCP_RESOURCE` |
 
 With them set:
 - `POST /mcp` without a token → `401` + `WWW-Authenticate` pointing at the login metadata
 - `GET /.well-known/oauth-protected-resource` → resource URL, Asgardeo issuer, scope
-- the token must be an Asgardeo **JWT** with issuer `<ASGARDEO_BASE_URL>/oauth2/token`, audience = `MCP_RESOURCE`, and the scope
+- the token must be an Asgardeo **JWT** with issuer `<ASGARDEO_BASE_URL>/oauth2/token`, the scope, and either audience = `MCP_RESOURCE` or (when `ASGARDEO_CLIENT_ID` is set) audience and `azp` = that client ID
 
 Without them the server runs **with no auth** (local testing only).
 
