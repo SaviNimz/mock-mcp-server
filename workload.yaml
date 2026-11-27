@@ -1,0 +1,10 @@
+# OpenChoreo workload descriptor (read by the build workflow).
+apiVersion: openchoreo.dev/v1alpha1
+metadata:
+  name: mock-mcp
+endpoints:
+  - name: mcp
+    visibility:
+      - external
+    port: 3000
+    type: HTTP

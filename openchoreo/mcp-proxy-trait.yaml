@@ -1,0 +1,114 @@
+# mcp-proxy ClusterTrait for OpenChoreo + Choreo API Platform Gateway
+#
+# Puts a component's MCP endpoint behind the Choreo API Platform gateway as an MCP proxy
+# secured by the `mcp-auth` policy (OAuth protected-resource metadata + JWT validation
+# against Asgardeo) and, optionally, the `mcp-authz` policy (per-tool scopes).
+#
+# Modelled on the community module's `api-management` trait
+# (openchoreo/community-modules/gateway-wso2-api-platform). Differences:
+#   - creates an `Mcp` resource instead of a `RestApi`
+#   - keeps the PUBLIC path prefix (/<component>-<endpoint>) as the gateway context,
+#     because mcp-auth advertises  resource = gatewayurl + context + "/mcp".
+#     If the context differed from the public path, Claude would be sent to a wrong URL.
+#
+# Public MCP URL:  https://<env>-<namespace>.<gateway host>/<component>-<endpoint>/mcp
+# Upstream:        http://<component>.<ns>:<endpoint port>/mcp   (your server must serve /mcp)
+#
+# Limitations:
+#   - The gateway's `mcpauth_v1.gatewayurl` is one value per gateway, and the context is the
+#     same in every environment, so deploy this component to ONE environment per data plane
+#     (e.g. dev data plane + prod data plane).
+#   - Not an official OpenChoreo/WSO2 trait. Test it in a dev cluster first.
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterTrait
+metadata:
+  name: mcp-proxy
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      $defs:
+        ToolScope:
+          type: object
+          properties:
+            name:
+              type: string            # MCP tool name, or "*" for all tools
+            scopes:
+              type: array             # ALL of these scopes are required
+              items:
+                type: string
+      properties:
+        endpoint:
+          type: string
+          default: mcp                # Workload endpoint key that serves MCP
+        issuers:
+          type: array                 # key manager names from gateway-configuration.yaml
+          items:
+            type: string
+          default: ["Asgardeo"]
+        requiredScopes:
+          type: array                 # scopes advertised to Claude in the metadata
+          items:
+            type: string
+          default: []
+        toolScopes:
+          type: array                 # enforced per tool via mcp-authz (empty = not enforced)
+          items:
+            $ref: "#/$defs/ToolScope"
+          default: []
+
+  creates:
+    # kgateway Backend pointing at the Choreo API Platform gateway runtime (router + policy engine)
+    - template:
+        apiVersion: gateway.kgateway.dev/v1alpha1
+        kind: Backend
+        metadata:
+          name: '${metadata.releaseLineName == "" ? metadata.componentName : metadata.componentLineName}-mcp-gw-backend'
+          namespace: ${metadata.namespace}
+        spec:
+          type: Static
+          static:
+            hosts:
+              - host: api-platform-default-gateway-gateway-runtime.openchoreo-data-plane
+                port: 8080
+
+    # The MCP proxy definition the Choreo API Platform operator turns into gateway config
+    - template:
+        apiVersion: gateway.api-platform.wso2.com/v1alpha1
+        kind: Mcp
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+        spec:
+          displayName: '${metadata.environmentName}-${metadata.componentNamespace}-${metadata.releaseLineName == "" ? metadata.componentName : metadata.componentLineName}'
+          version: v1.0
+          specVersion: "2025-06-18"
+          context: '/${metadata.releaseLineName == "" ? metadata.componentName : metadata.componentLineName}-${parameters.endpoint}'
+          upstream:
+            url: 'http://${metadata.releaseLineName == "" ? metadata.componentName : metadata.componentLineName}.${metadata.namespace}:${workload.endpoints[parameters.endpoint].port}'
+          policies: >-
+            ${[{"name": "mcp-auth", "version": "v1", "params": {"issuers": parameters.issuers, "requiredScopes": parameters.requiredScopes}}]
+              + (size(parameters.toolScopes) > 0
+                  ? [{"name": "mcp-authz", "version": "v1", "params": {"tools": parameters.toolScopes.map(t, {"name": t.name, "scopes": {"allOf": t.scopes}})}}]
+                  : [])}
+
+  patches:
+    # Send the component's HTTPRoute traffic through the gateway instead of straight to the Service,
+    # and keep the public path prefix so it matches the Mcp context above.
+    - target:
+        group: gateway.networking.k8s.io
+        version: v1
+        kind: HTTPRoute
+      operations:
+        - op: replace
+          path: '/spec/rules/0/backendRefs/[?(@.name==''${metadata.releaseLineName == "" ? metadata.componentName : metadata.componentLineName}'')]'
+          value:
+            group: gateway.kgateway.dev
+            kind: Backend
+            name: '${metadata.releaseLineName == "" ? metadata.componentName : metadata.componentLineName}-mcp-gw-backend'
+        - op: replace
+          path: /spec/rules/0/filters/0/urlRewrite/path
+          value:
+            type: ReplacePrefixMatch
+            replacePrefixMatch: '/${metadata.releaseLineName == "" ? metadata.componentName : metadata.componentLineName}-${parameters.endpoint}'

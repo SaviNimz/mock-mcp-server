@@ -1,0 +1,19 @@
+{
+  "name": "mock-mcp-server",
+  "version": "1.0.0",
+  "description": "Mock MCP server (Streamable HTTP) for testing on OpenChoreo",
+  "private": true,
+  "type": "module",
+  "main": "src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "express": "5.3.0",
+    "zod": "4.6.7"
+  }
+}
