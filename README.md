@@ -9,7 +9,24 @@ Streamable HTTP at `POST /mcp`, port `3000`.
 | `echo` `{ "message": "hi" }` | `hi` |
 | `add` `{ "a": 2, "b": 3 }` | `5` |
 
-The server has **no auth of its own**. On OpenChoreo, the gateway's `mcp-auth` policy checks Asgardeo tokens before requests reach it (the `mcp-proxy` trait sets this up).
+## Asgardeo login
+
+The server checks **Asgardeo** access tokens itself when these env vars are set (in OpenChoreo: Deploy → Create release → Workload → Environment Variables):
+
+| Env var | Example |
+|---|---|
+| `ASGARDEO_BASE_URL` | `https://api.asgardeo.io/t/<org>` |
+| `MCP_RESOURCE` | the public MCP URL, e.g. `https://<env>-<ns>.<gateway-host>/<component>-mcp/mcp` |
+| `MCP_SCOPE` | `mcp:access` |
+
+With them set:
+- `POST /mcp` without a token → `401` + `WWW-Authenticate` pointing at the login metadata
+- `GET /.well-known/oauth-protected-resource` → resource URL, Asgardeo issuer, scope
+- the token must be an Asgardeo **JWT** with issuer `<ASGARDEO_BASE_URL>/oauth2/token`, audience = `MCP_RESOURCE`, and the scope
+
+Without them the server runs **with no auth** (local testing only).
+
+In Asgardeo: API resource identifier = `MCP_RESOURCE`, scope `MCP_SCOPE`, app with redirect URL `https://claude.ai/api/mcp/auth_callback`, access token type JWT, API authorized for the app.
 
 ## Run locally
 
@@ -29,10 +46,9 @@ curl -s -X POST localhost:3000/mcp \
 | Component Name | `mock-mcp` |
 | Build & Deploy | **Build from Source**, workflow `dockerfile-builder` |
 | Git Repository URL / Branch / Application Path | this repo / `main` / `.` |
-| Traits | `mcp-proxy`: `endpoint: mcp`, `issuers: [Asgardeo]`, `requiredScopes: [mcp:access]` |
 
 The endpoint (`mcp`, port 3000, external) comes from `workload.yaml`.
-The `mcp-proxy` trait (`openchoreo/mcp-proxy-trait.yaml`) and the gateway module have to be installed once by a cluster admin.
+Then set the three env vars above and deploy.
 
 The MCP URL is the endpoint URL on the **Deploy** tab plus `/mcp`:
 `https://<env>-<namespace>.<gateway-host>/mock-mcp-mcp/mcp`
